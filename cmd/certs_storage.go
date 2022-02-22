@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/json"
-	"github.com/go-acme/lego/v4/certcrypto"
-	"github.com/go-acme/lego/v4/certificate"
-	"golang.org/x/net/idna"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/DuKanghub/dcert/config"
+	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/certificate"
+	"golang.org/x/net/idna"
 )
 
 type CertificatesStorage struct {
@@ -21,6 +23,7 @@ type CertificatesStorage struct {
 
 // NewCertificatesStorage create a new certificates storage.
 func NewCertificatesStorage() *CertificatesStorage {
+	SavePath := config.CONFIG.String("SavePath")
 	return &CertificatesStorage{
 		rootPath:    filepath.Join(SavePath, "certificates"),
 		archivePath: filepath.Join(SavePath, "archives"),

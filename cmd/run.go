@@ -5,16 +5,17 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/DuKanghub/dcert/config"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/providers/dns/alidns"
 	"github.com/go-acme/lego/v4/registration"
-	"log"
-	"strings"
-	"time"
 )
 
 const rootPathWarningMessage = `!!!! HEADS UP !!!!
@@ -29,8 +30,11 @@ backups of this folder is ideal.
 `
 
 func GetSSLCerts(challenge string, domains []string) {
-	accountsStorage := NewAccountsStorage(Email)
+	email := config.CONFIG.String("Email")
+
+	accountsStorage := NewAccountsStorage(email)
 	account, client := setup(accountsStorage)
+
 	var err error
 	if account.Registration == nil {
 		reg, err := register(client)
@@ -44,33 +48,22 @@ func GetSSLCerts(challenge string, domains []string) {
 
 		fmt.Printf(rootPathWarningMessage, accountsStorage.GetRootPath())
 	}
+
 	certsStorage := NewCertificatesStorage()
 	certsStorage.CreateRootFolder()
-	challenge = strings.ToUpper(challenge)
-	if challenge == "DNS" {
-		//使用dns验证
-		if strings.TrimSpace(AliAccessKeyId) == "" || strings.TrimSpace(AliAccessKeySecret) == "" {
-			log.Fatal("使用dns验证需要传入 AliAccessKeyId 和 AliAccessKeySecret ")
-		}
-		dnsConfig := &alidns.Config{
-			APIKey:             AliAccessKeyId,
-			SecretKey:          AliAccessKeySecret,
-			TTL:                600,
-			HTTPTimeout:        200 * time.Second,
-			PollingInterval:    2 * time.Second,   //每2秒查一下txt记录
-			PropagationTimeout: 120 * time.Second, //检查120s
-		}
-		dnsProvider, err := alidns.NewDNSProviderConfig(dnsConfig)
+
+	switch challenge {
+	case "dns":
+		dnsProvider, err := dns01.NewDNSProviderManual()
 		if err != nil {
 			log.Fatal(err)
 		}
 		err = client.Challenge.SetDNS01Provider(
 			dnsProvider,
-			dns01.AddRecursiveNameservers([]string{"114.114.114.114:53", "dns11.hichina.com:53", "dns12.hichina.com:53"}),
+			dns01.AddRecursiveNameservers(config.CONFIG.Strings("DNSNameservers")),
 			dns01.AddDNSTimeout(60*time.Second),
 		)
-	} else if challenge == "HTTP" {
-		//HTTP验证：起一个http server监听18888，需保证外网能访问到。
+	case "http":
 		err = client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "18888"))
 	}
 
@@ -80,45 +73,33 @@ func GetSSLCerts(challenge string, domains []string) {
 
 	cert, err := obtainCertificate(domains, client)
 	if err != nil {
-		// Make sure to return a non-zero exit code if ObtainSANCertificate returned at least one error.
-		// Due to us not returning partial certificate we can just exit here instead of at the end.
 		log.Fatalf("Could not obtain certificates:\n\t%v", err)
 	}
 	certsStorage.SaveResource(cert)
 
 }
+
 func RenewCert(challenge string, domains []string) (err error) {
 	var errStr string
 	domain := domains[0]
-	account, client := setup(NewAccountsStorage(Email))
+	accountsStorage := NewAccountsStorage(config.CONFIG.String("Email"))
+	account, client := setup(accountsStorage)
 	if account.Registration == nil {
 		log.Fatalf("Account %s is not registered. Use 'run' to register a new account.\n", account.Email)
 	}
 	challenge = strings.ToUpper(challenge)
 	if challenge == "DNS" {
-		//使用dns验证
-		if strings.TrimSpace(AliAccessKeyId) == "" || strings.TrimSpace(AliAccessKeySecret) == "" {
-			log.Fatal("使用dns验证需要传入 AliAccessKeyId 和 AliAccessKeySecret ")
-		}
-		dnsConfig := &alidns.Config{
-			APIKey:             AliAccessKeyId,
-			SecretKey:          AliAccessKeySecret,
-			TTL:                600,
-			HTTPTimeout:        200 * time.Second,
-			PollingInterval:    2 * time.Second,   //每2秒查一下txt记录
-			PropagationTimeout: 120 * time.Second, //检查120s
-		}
-		dnsProvider, err := alidns.NewDNSProviderConfig(dnsConfig)
+		dnsProvider, err := dns01.NewDNSProviderManual()
 		if err != nil {
 			log.Fatal(err)
 		}
 		err = client.Challenge.SetDNS01Provider(
 			dnsProvider,
-			dns01.AddRecursiveNameservers([]string{"114.114.114.114:53", "dns11.hichina.com:53", "dns12.hichina.com:53"}),
+			dns01.AddRecursiveNameservers(config.CONFIG.Strings("DNSNameservers")),
 			dns01.AddDNSTimeout(60*time.Second),
 		)
 	} else if challenge == "HTTP" {
-		//HTTP验证：起一个http server监听18888，需保证外网能访问到。
+		// HTTP验证：起一个http server监听18888，需保证外网能访问到。
 		err = client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "18888"))
 	}
 
@@ -139,7 +120,7 @@ func RenewCert(challenge string, domains []string) (err error) {
 	timeLeft := cert.NotAfter.Sub(time.Now().UTC())
 	fmt.Printf("[%s] acme: Trying renewal with %d hours remaining\n", domain, int(timeLeft.Hours()))
 	certDomains := certcrypto.ExtractDomains(cert)
-	//复用旧的private key
+	// 复用旧的private key
 	var privateKey crypto.PrivateKey
 	keyBytes, errR := certsStorage.ReadFile(domain, ".key")
 	if errR != nil {
@@ -163,6 +144,7 @@ func RenewCert(challenge string, domains []string) (err error) {
 	certsStorage.SaveResource(certRes)
 	return err
 }
+
 func needRenewal(x509Cert *x509.Certificate, domain string, days int) bool {
 	if x509Cert.IsCA {
 		log.Fatalf("[%s] Certificate bundle starts with a CA certificate", domain)
@@ -179,6 +161,7 @@ func needRenewal(x509Cert *x509.Certificate, domain string, days int) bool {
 
 	return true
 }
+
 func register(client *lego.Client) (*registration.Resource, error) {
 	return client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 }
@@ -195,6 +178,7 @@ func obtainCertificate(domains []string, client *lego.Client) (*certificate.Reso
 	}
 	return nil, errors.New("请传入1个域名")
 }
+
 func merge(prevDomains, nextDomains []string) []string {
 	for _, next := range nextDomains {
 		var found bool

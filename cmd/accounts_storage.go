@@ -7,14 +7,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/DuKanghub/dcert/config"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
-	"log"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 type AccountsStorage struct {
@@ -26,26 +26,24 @@ type AccountsStorage struct {
 }
 
 func NewAccountsStorage(email string) *AccountsStorage {
-	// TODO: move to account struct? Currently MUST pass email.
-	serverURL, err := url.Parse(CADirURL)
-	if err != nil {
-		log.Fatal(err)
-	}
+	savePath := config.CONFIG.String("SavePath")
+	rootPath := filepath.Join(savePath, "accounts")
 
-	rootPath := filepath.Join(SavePath, "accounts")
-	serverPath := strings.NewReplacer(":", "_", "/", string(os.PathSeparator)).Replace(serverURL.Host)
-	fmt.Println("serverPath:", serverPath)
-	accountsPath := filepath.Join(rootPath, serverPath)
+	accountsPath := filepath.Join(rootPath)
 	rootUserPath := filepath.Join(accountsPath, email)
+
+	keysPath := filepath.Join(rootUserPath, "keys")
+	accountFilePath := filepath.Join(rootUserPath, "account.json")
 
 	return &AccountsStorage{
 		userID:          email,
+		keysPath:        keysPath,
 		rootPath:        rootPath,
 		rootUserPath:    rootUserPath,
-		keysPath:        filepath.Join(rootUserPath, "keys"),
-		accountFilePath: filepath.Join(rootUserPath, "account.json"),
+		accountFilePath: accountFilePath,
 	}
 }
+
 func (s *AccountsStorage) ExistsAccountFilePath() bool {
 	accountFile := filepath.Join(s.rootUserPath, "account.json")
 	if _, err := os.Stat(accountFile); os.IsNotExist(err) {
@@ -55,6 +53,7 @@ func (s *AccountsStorage) ExistsAccountFilePath() bool {
 	}
 	return true
 }
+
 func (s *AccountsStorage) Save(account *AcmeAccount) error {
 	jsonBytes, err := json.MarshalIndent(account, "", "\t")
 	if err != nil {
@@ -75,7 +74,7 @@ func (s *AccountsStorage) LoadAccount(privateKey crypto.PrivateKey) *AcmeAccount
 		log.Fatalf("Could not parse file for account %s: %v", s.userID, err)
 	}
 
-	account.key = privateKey
+	account.privateKey = privateKey
 
 	if account.Registration == nil || account.Registration.Body.Status == "" {
 		reg, err := tryRecoverRegistration(privateKey)
@@ -92,13 +91,13 @@ func (s *AccountsStorage) LoadAccount(privateKey crypto.PrivateKey) *AcmeAccount
 
 	return &account
 }
-func tryRecoverRegistration( privateKey crypto.PrivateKey) (*registration.Resource, error) {
+func tryRecoverRegistration(privateKey crypto.PrivateKey) (*registration.Resource, error) {
 	// couldn't load account but got a key. Try to look the account up.
-	config := lego.NewConfig(&AcmeAccount{key: privateKey})
-	config.CADirURL = CADirURL
-	config.UserAgent = fmt.Sprintf("lego-cli/%s", "dev")
+	legoConfig := lego.NewConfig(&AcmeAccount{privateKey: privateKey})
+	legoConfig.CADirURL = config.CONFIG.String("CADirURL")
+	legoConfig.UserAgent = fmt.Sprintf("lego-cli/%s", "dev")
 
-	client, err := lego.NewClient(config)
+	client, err := lego.NewClient(legoConfig)
 	if err != nil {
 		return nil, err
 	}

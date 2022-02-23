@@ -15,7 +15,7 @@ func init() {
 	CONFIG = LoadConfig()
 }
 
-//go:embed *.yml
+//go:embed *.yaml
 var f embed.FS
 
 func LoadConfig() *config.Config {
